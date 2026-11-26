@@ -3,6 +3,7 @@
 #include <arpa/inet.h>
 #include <errno.h>
 #include <netinet/in.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -142,21 +143,40 @@ static void print_colored_name(const char *name) {
     printf("\033[38;5;%dm%s\033[0m", color, name);
 }
 
+/* Get the next protocol field without splitting the remaining message. */
+static char *next_field(char **cursor) {
+    if (*cursor == NULL)
+        return NULL;
+
+    char *field = *cursor;
+    char *separator = strchr(field, '|');
+
+    if (separator != NULL) {
+        *separator = '\0';
+        *cursor = separator + 1;
+    } else {
+        *cursor = NULL;
+    }
+
+    return field;
+}
+
 /* Process and display a message received from the server. */
 static void print_server_message(const char *line) {
     char copy[LINE_SIZE];
 
     snprintf(copy, sizeof(copy), "%s", line);
 
-    char *kind = strtok(copy, "|");
+    char *cursor = copy;
+    char *kind = next_field(&cursor);
 
     if (kind == NULL)
         return;
 
     if (strcmp(kind, "CHAT") == 0) {
-        char *name = strtok(NULL, "|");
-        char *ip = strtok(NULL, "|");
-        char *message = strtok(NULL, "");
+        char *name = next_field(&cursor);
+        char *ip = next_field(&cursor);
+        char *message = cursor;
 
         if (name && ip && message) {
             printf("[");
@@ -168,8 +188,8 @@ static void print_server_message(const char *line) {
     }
 
     else if (strcmp(kind, "JOINED") == 0) {
-        char *name = strtok(NULL, "|");
-        char *ip = strtok(NULL, "|");
+        char *name = next_field(&cursor);
+        char *ip = next_field(&cursor);
 
         if (name && ip) {
             printf("\n");
@@ -181,8 +201,8 @@ static void print_server_message(const char *line) {
     }
 
     else if (strcmp(kind, "LEFT") == 0) {
-        char *name = strtok(NULL, "|");
-        char *ip = strtok(NULL, "|");
+        char *name = next_field(&cursor);
+        char *ip = next_field(&cursor);
 
         if (name && ip) {
             printf("\n");
@@ -196,8 +216,8 @@ static void print_server_message(const char *line) {
     }
 
     else if (strcmp(kind, "MEMBER") == 0) {
-        char *name = strtok(NULL, "|");
-        char *ip = strtok(NULL, "|");
+        char *name = next_field(&cursor);
+        char *ip = next_field(&cursor);
 
         if (name && ip) {
             color_for(name);
@@ -220,6 +240,8 @@ int main(int argc, char *argv[]) {
                 argv[0]);
         return 1;
     }
+
+    signal(SIGPIPE, SIG_IGN);
 
     srand((unsigned int)time(NULL) ^ (unsigned int)getpid());
 
@@ -255,7 +277,7 @@ int main(int argc, char *argv[]) {
 
     char line[LINE_SIZE];
 
-    /* Receive the current room list. */
+    /* Receive the current room list from the server. */
     int result = read_line(sock, line, sizeof(line));
 
     if (result <= 0 || strcmp(line, "ROOMS") != 0) {
@@ -264,9 +286,12 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    printf("Server says following options are available:\n\n");
-
+    /* Only display the room list when no room argument was supplied. */
     int available_rooms = 0;
+
+    if (argc == 2) {
+        printf("Server says following options are available:\n\n");
+    }
 
     while ((result = read_line(sock, line, sizeof(line))) > 0) {
         if (strcmp(line, "ENDROOMS") == 0)
@@ -278,12 +303,15 @@ int main(int argc, char *argv[]) {
 
             if (sscanf(line + 5, "%d|%d",
                        &room_id, &people) == 2) {
-                printf("Room %d: %d %s\n\n",
-                       room_id,
-                       people,
-                       people == 1 ? "person" : "people");
 
                 available_rooms++;
+
+                if (argc == 2) {
+                    printf("Room %d: %d %s\n\n",
+                           room_id,
+                           people,
+                           people == 1 ? "person" : "people");
+                }
             }
         }
     }
